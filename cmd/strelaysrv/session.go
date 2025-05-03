@@ -3,7 +3,8 @@
 package main
 
 import (
-	"crypto/rand"
+	rand "crypto/rand"
+	irand "math/rand"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -277,10 +278,12 @@ func (s *session) proxy(c1, c2 net.Conn) error {
 			s.rateLimit(n)
 		}
 
-		c2.SetWriteDeadline(time.Now().Add(networkTimeout))
-		_, err = c2.Write(buf[:n])
-		if err != nil {
-			return err
+		if irand.Intn(20-1) != 0 {
+			c2.SetWriteDeadline(time.Now().Add(networkTimeout))
+			_, err = c2.Write(buf[:n])
+			if err != nil {
+				return err
+			}
 		}
 	}
 }
