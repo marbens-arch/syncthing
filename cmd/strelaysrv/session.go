@@ -4,11 +4,11 @@ package main
 
 import (
 	rand "crypto/rand"
-	irand "math/rand"
 	"encoding/hex"
 	"fmt"
 	"log"
 	"math"
+	irand "math/rand"
 	"net"
 	"sync"
 	"sync/atomic"
