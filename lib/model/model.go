@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	stdsync "sync"
 	"sync/atomic"
@@ -1628,8 +1629,7 @@ func (m *model) sendClusterConfig(ids []protocol.DeviceID) {
 	// Generating cluster-configs acquires the mutex.
 	for _, conn := range ccConns {
 		cm, passwords := m.generateClusterConfig(conn.DeviceID())
-		conn.SetFolderPasswords(passwords)
-		go conn.ClusterConfig(cm)
+		go conn.ClusterConfig(cm, passwords)
 	}
 }
 
@@ -1804,11 +1804,9 @@ func (m *model) handleAutoAccepts(deviceID protocol.DeviceID, folder protocol.Fo
 		l.Infof("Failed to auto-accept folder %s from %s due to path conflict", folder.Description(), deviceID)
 		return config.FolderConfiguration{}, false
 	} else {
-		for _, device := range cfg.DeviceIDs() {
-			if device == deviceID {
-				// Already shared nothing todo.
-				return config.FolderConfiguration{}, false
-			}
+		if slices.Contains(cfg.DeviceIDs(), deviceID) {
+			// Already shared nothing todo.
+			return config.FolderConfiguration{}, false
 		}
 		if cfg.Type == config.FolderTypeReceiveEncrypted {
 			if len(ccDeviceInfos.remote.EncryptionPasswordToken) == 0 && len(ccDeviceInfos.local.EncryptionPasswordToken) == 0 {
@@ -2385,8 +2383,14 @@ func (m *model) scheduleConnectionPromotion() {
 // be called after adding new connections, and after closing a primary
 // device connection.
 func (m *model) promoteConnections() {
+	// Slice of actions to take on connections after releasing the main
+	// mutex. We do this so that we do not perform blocking network actions
+	// inside the loop, and also to avoid a possible deadlock with calling
+	// Start() on connections that are already executing a Close() with a
+	// callback into the model...
+	var postLockActions []func()
+
 	m.mut.Lock()
-	defer m.mut.Unlock()
 
 	for deviceID, connIDs := range m.deviceConnIDs {
 		cm, passwords := m.generateClusterConfigRLocked(deviceID)
@@ -2399,11 +2403,12 @@ func (m *model) promoteConnections() {
 			// on where we get ClusterConfigs from the peer.)
 			conn := m.connections[connIDs[0]]
 			l.Debugf("Promoting connection to %s at %s", deviceID.Short(), conn)
-			if conn.Statistics().StartedAt.IsZero() {
-				conn.SetFolderPasswords(passwords)
-				conn.Start()
-			}
-			conn.ClusterConfig(cm)
+			postLockActions = append(postLockActions, func() {
+				if conn.Statistics().StartedAt.IsZero() {
+					conn.Start()
+				}
+				conn.ClusterConfig(cm, passwords)
+			})
 			m.promotedConnID[deviceID] = connIDs[0]
 		}
 
@@ -2412,11 +2417,18 @@ func (m *model) promoteConnections() {
 		for _, connID := range connIDs[1:] {
 			conn := m.connections[connID]
 			if conn.Statistics().StartedAt.IsZero() {
-				conn.SetFolderPasswords(passwords)
-				conn.Start()
-				conn.ClusterConfig(&protocol.ClusterConfig{Secondary: true})
+				postLockActions = append(postLockActions, func() {
+					conn.Start()
+					conn.ClusterConfig(&protocol.ClusterConfig{Secondary: true}, passwords)
+				})
 			}
 		}
+	}
+
+	m.mut.Unlock()
+
+	for _, action := range postLockActions {
+		action()
 	}
 }
 
