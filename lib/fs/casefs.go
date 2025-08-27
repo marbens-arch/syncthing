@@ -50,7 +50,7 @@ type fskey struct {
 // caseFilesystemRegistry caches caseFilesystems and runs a routine to drop
 // their cache every now and then.
 type caseFilesystemRegistry struct {
-	caseCaches   map[fskey]*caseCache
+	fss          map[fskey]*caseFilesystem
 	mut          sync.RWMutex
 	startCleaner sync.Once
 }
@@ -77,15 +77,18 @@ func (r *caseFilesystemRegistry) get(fs Filesystem) Filesystem {
 	// take a write lock and try again.
 
 	r.mut.RLock()
-	cache, ok := r.caseCaches[k]
+	caseFs, ok := r.fss[k]
 	r.mut.RUnlock()
 
 	if !ok {
 		r.mut.Lock()
-		cache, ok = r.caseCaches[k]
+		caseFs, ok = r.fss[k]
 		if !ok {
-			cache = newCaseCache()
-			r.caseCaches[k] = cache
+			caseFs = &caseFilesystem{
+				Filesystem: fs,
+				realCaser:  newDefaultRealCaser(fs),
+			}
+			r.fss[k] = caseFs
 			r.startCleaner.Do(func() {
 				go r.cleaner()
 			})
@@ -97,13 +100,7 @@ func (r *caseFilesystemRegistry) get(fs Filesystem) Filesystem {
 		l.Debugf("Reusing case cache for key %v", k)
 	}
 
-	return &caseFilesystem{
-		Filesystem: fs,
-		realCaser: &defaultRealCaser{
-			fs:    fs,
-			cache: cache,
-		},
-	}
+	return caseFs
 }
 
 func (r *caseFilesystemRegistry) cleaner() {
@@ -116,19 +113,19 @@ func (r *caseFilesystemRegistry) cleaner() {
 		// within the loop.
 
 		r.mut.RLock()
-		toProcess := make([]*caseCache, 0, len(r.caseCaches))
-		for _, cache := range r.caseCaches {
-			toProcess = append(toProcess, cache)
+		toProcess := make([]*caseFilesystem, 0, len(r.fss))
+		for _, caseFs := range r.fss {
+			toProcess = append(toProcess, caseFs)
 		}
 		r.mut.RUnlock()
 
-		for _, cache := range toProcess {
-			cache.Purge()
+		for _, caseFs := range toProcess {
+			caseFs.dropCache()
 		}
 	}
 }
 
-var globalCaseFilesystemRegistry = caseFilesystemRegistry{caseCaches: make(map[fskey]*caseCache)}
+var globalCaseFilesystemRegistry = caseFilesystemRegistry{fss: make(map[fskey]*caseFilesystem)}
 
 // OptionDetectCaseConflicts ensures that the potentially case-insensitive filesystem
 // behaves like a case-sensitive filesystem. Meaning that it takes into account
@@ -395,20 +392,21 @@ func (f *caseFilesystem) checkCaseExisting(name string) error {
 }
 
 type defaultRealCaser struct {
-	cache *caseCache
-	fs    Filesystem
-	mut   sync.Mutex
+	cache caseCache
 }
 
-type caseCache = lru.TwoQueueCache[string, *caseNode]
-
-func newCaseCache() *caseCache {
+func newDefaultRealCaser(fs Filesystem) *defaultRealCaser {
 	cache, err := lru.New2Q[string, *caseNode](caseCacheItemLimit)
 	// New2Q only errors if given invalid parameters, which we don't.
 	if err != nil {
 		panic(err)
 	}
-	return cache
+	return &defaultRealCaser{
+		cache: caseCache{
+			fs:            fs,
+			TwoQueueCache: cache,
+		},
+	}
 }
 
 func (r *defaultRealCaser) realCase(name string) (string, error) {
@@ -418,7 +416,7 @@ func (r *defaultRealCaser) realCase(name string) (string, error) {
 	}
 
 	for _, comp := range PathComponents(name) {
-		node := r.getExpireAdd(realName)
+		node := r.cache.getExpireAdd(realName)
 
 		if node.err != nil {
 			return "", node.err
@@ -442,20 +440,26 @@ func (r *defaultRealCaser) dropCache() {
 	r.cache.Purge()
 }
 
+type caseCache struct {
+	*lru.TwoQueueCache[string, *caseNode]
+	fs  Filesystem
+	mut sync.Mutex
+}
+
 // getExpireAdd gets an entry for the given key. If no entry exists, or it is
 // expired a new one is created and added to the cache.
-func (r *defaultRealCaser) getExpireAdd(key string) *caseNode {
-	r.mut.Lock()
-	defer r.mut.Unlock()
-	node, ok := r.cache.Get(key)
+func (c *caseCache) getExpireAdd(key string) *caseNode {
+	c.mut.Lock()
+	defer c.mut.Unlock()
+	node, ok := c.Get(key)
 	if !ok {
-		node := newCaseNode(key, r.fs)
-		r.cache.Add(key, node)
+		node := newCaseNode(key, c.fs)
+		c.Add(key, node)
 		return node
 	}
 	if node.expires.Before(time.Now()) {
-		node = newCaseNode(key, r.fs)
-		r.cache.Add(key, node)
+		node = newCaseNode(key, c.fs)
+		c.Add(key, node)
 	}
 	return node
 }
