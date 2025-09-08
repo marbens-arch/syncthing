@@ -7,6 +7,7 @@
 package sqlite
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -52,8 +53,7 @@ func Open(path string, opts ...Option) (*DB, error) {
 		"journal_mode = WAL",
 		"optimize = 0x10002",
 		"auto_vacuum = INCREMENTAL",
-		"default_temp_store = MEMORY",
-		"temp_store = MEMORY",
+		fmt.Sprintf("application_id = %d", applicationIDMain),
 	}
 	schemas := []string{
 		"sql/schema/common/*",
@@ -86,6 +86,10 @@ func Open(path string, opts ...Option) (*DB, error) {
 		slog.Warn("Failed to clean dropped folders", slogutil.Error(err))
 	}
 
+	if err := db.startFolderDatabases(); err != nil {
+		return nil, wrap(err)
+	}
+
 	return db, nil
 }
 
@@ -95,11 +99,10 @@ func Open(path string, opts ...Option) (*DB, error) {
 func OpenForMigration(path string) (*DB, error) {
 	pragmas := []string{
 		"journal_mode = OFF",
-		"default_temp_store = MEMORY",
-		"temp_store = MEMORY",
 		"foreign_keys = 0",
 		"synchronous = 0",
 		"locking_mode = EXCLUSIVE",
+		fmt.Sprintf("application_id = %d", applicationIDMain),
 	}
 	schemas := []string{
 		"sql/schema/common/*",
@@ -129,19 +132,6 @@ func OpenForMigration(path string) (*DB, error) {
 	}
 
 	return db, nil
-}
-
-func OpenTemp() (*DB, error) {
-	// SQLite has a memory mode, but it works differently with concurrency
-	// compared to what we need with the WAL mode. So, no memory databases
-	// for now.
-	dir, err := os.MkdirTemp("", "syncthing-db")
-	if err != nil {
-		return nil, wrap(err)
-	}
-	path := filepath.Join(dir, "db")
-	slog.Debug("Test DB", slogutil.FilePath(path))
-	return Open(path)
 }
 
 func (s *DB) Close() error {

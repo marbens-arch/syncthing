@@ -4,8 +4,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this file,
 // You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//go:generate -command counterfeiter go run github.com/maxbrunsfeld/counterfeiter/v6
-//go:generate counterfeiter -o mocks/model.go --fake-name Model . Model
+//go:generate go tool counterfeiter -o mocks/model.go --fake-name Model . Model
 
 package model
 
@@ -2549,6 +2548,12 @@ func (m *model) numHashers(folder string) int {
 	m.mut.RLock()
 	folderCfg := m.folderCfgs[folder]
 	numFolders := max(1, len(m.folderCfgs))
+	// MaxFolderConcurrency already limits the number of scanned folders, so
+	// prefer it over the overall number of folders to avoid limiting performance
+	// further for no reason.
+	if concurrency := m.cfg.Options().MaxFolderConcurrency(); concurrency > 0 {
+		numFolders = min(numFolders, concurrency)
+	}
 	m.mut.RUnlock()
 
 	if folderCfg.Hashers > 0 {
@@ -2556,16 +2561,17 @@ func (m *model) numHashers(folder string) int {
 		return folderCfg.Hashers
 	}
 
+	numCpus := runtime.GOMAXPROCS(-1)
 	if build.IsWindows || build.IsDarwin || build.IsIOS || build.IsAndroid {
 		// Interactive operating systems; don't load the system too heavily by
 		// default.
-		return 1
+		numCpus = max(1, numCpus/4)
 	}
 
 	// For other operating systems and architectures, lets try to get some
 	// work done... Divide the available CPU cores among the configured
 	// folders.
-	if perFolder := runtime.GOMAXPROCS(-1) / numFolders; perFolder > 0 {
+	if perFolder := numCpus / numFolders; perFolder > 0 {
 		return perFolder
 	}
 

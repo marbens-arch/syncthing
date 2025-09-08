@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"sync"
 	"time"
@@ -158,7 +157,8 @@ func OpenDatabase(path string, deleteRetention time.Duration) (db.DB, error) {
 }
 
 // Attempts migration of the old (LevelDB-based) database type to the new (SQLite-based) type
-func TryMigrateDatabase(ctx context.Context, deleteRetention time.Duration, apiAddr string) error {
+// This will attempt to provide a temporary API server during the migration, if `apiAddr` is not empty.
+func TryMigrateDatabase(ctx context.Context, deleteRetention time.Duration) error {
 	oldDBDir := locations.Get(locations.LegacyDatabase)
 	if _, err := os.Lstat(oldDBDir); err != nil {
 		// No old database
@@ -171,12 +171,6 @@ func TryMigrateDatabase(ctx context.Context, deleteRetention time.Duration, apiA
 		return nil
 	}
 	defer be.Close()
-
-	// Start a temporary API server during the migration
-	api := migratingAPI{addr: apiAddr}
-	apiCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	go api.Serve(apiCtx)
 
 	sdb, err := sqlite.OpenForMigration(locations.Get(locations.Database))
 	if err != nil {
@@ -233,7 +227,7 @@ func TryMigrateDatabase(ctx context.Context, deleteRetention time.Duration, apiA
 					if time.Since(t1) > 10*time.Second {
 						d := time.Since(t0) + 1
 						t1 = time.Now()
-						slog.Info("Still migrating folder", "folder", folder, "files", files, "blocks", blocks, "duration", d.Truncate(time.Second), "filesrate", float64(files)/d.Seconds())
+						slog.Info("Still migrating folder", "folder", folder, "files", files, "blocks", blocks, "duration", d.Truncate(time.Second), "blocksrate", float64(blocks)/d.Seconds(), "filesrate", float64(files)/d.Seconds())
 					}
 				}
 			}
@@ -291,28 +285,4 @@ func TryMigrateDatabase(ctx context.Context, deleteRetention time.Duration, apiA
 
 	slog.Info("Migration complete", "files", totFiles, "blocks", totBlocks/1000, "duration", time.Since(t0).Truncate(time.Second))
 	return nil
-}
-
-type migratingAPI struct {
-	addr string
-}
-
-func (m migratingAPI) Serve(ctx context.Context) error {
-	srv := &http.Server{
-		Addr: m.addr,
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "text/plain")
-			w.Write([]byte("*** Database migration in progress ***\n\n"))
-			for _, line := range slogutil.GlobalRecorder.Since(time.Time{}) {
-				line.WriteTo(w)
-			}
-		}),
-	}
-	go func() {
-		slog.InfoContext(ctx, "Starting temporary GUI/API during migration", slogutil.Address(m.addr))
-		err := srv.ListenAndServe()
-		slog.InfoContext(ctx, "Temporary GUI/API closed", slogutil.Address(m.addr), slogutil.Error(err))
-	}()
-	<-ctx.Done()
-	return srv.Close()
 }

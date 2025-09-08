@@ -36,7 +36,7 @@ const (
 func TestBasics(t *testing.T) {
 	t.Parallel()
 
-	sdb, err := OpenTemp()
+	sdb, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,12 @@ func TestBasics(t *testing.T) {
 	)
 
 	t.Run("SchemaVersion", func(t *testing.T) {
-		ver, err := sdb.getAppliedSchemaVersion()
+		tx, err := sdb.sql.Beginx()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		ver, err := sdb.getAppliedSchemaVersion(tx)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -427,7 +432,7 @@ func TestBasics(t *testing.T) {
 func TestPrefixGlobbing(t *testing.T) {
 	t.Parallel()
 
-	sdb, err := OpenTemp()
+	sdb, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -496,7 +501,7 @@ func TestPrefixGlobbing(t *testing.T) {
 func TestPrefixGlobbingStar(t *testing.T) {
 	t.Parallel()
 
-	sdb, err := OpenTemp()
+	sdb, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -529,7 +534,7 @@ func TestPrefixGlobbingStar(t *testing.T) {
 }
 
 func TestAvailability(t *testing.T) {
-	db, err := OpenTemp()
+	db, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -596,7 +601,7 @@ func TestAvailability(t *testing.T) {
 }
 
 func TestDropFilesNamed(t *testing.T) {
-	db, err := OpenTemp()
+	db, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -640,7 +645,7 @@ func TestDropFilesNamed(t *testing.T) {
 }
 
 func TestDropFolder(t *testing.T) {
-	db, err := OpenTemp()
+	db, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -700,7 +705,7 @@ func TestDropFolder(t *testing.T) {
 }
 
 func TestDropDevice(t *testing.T) {
-	db, err := OpenTemp()
+	db, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -764,7 +769,7 @@ func TestDropDevice(t *testing.T) {
 }
 
 func TestDropAllFiles(t *testing.T) {
-	db, err := OpenTemp()
+	db, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -926,7 +931,7 @@ func TestConcurrentUpdateSelect(t *testing.T) {
 func TestAllForBlocksHash(t *testing.T) {
 	t.Parallel()
 
-	sdb, err := OpenTemp()
+	sdb, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -988,7 +993,7 @@ func TestAllForBlocksHash(t *testing.T) {
 func TestBlocklistGarbageCollection(t *testing.T) {
 	t.Parallel()
 
-	sdb, err := OpenTemp()
+	sdb, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1067,7 +1072,7 @@ func TestBlocklistGarbageCollection(t *testing.T) {
 func TestInsertLargeFile(t *testing.T) {
 	t.Parallel()
 
-	sdb, err := OpenTemp()
+	sdb, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1119,7 +1124,7 @@ func TestStrangeDeletedGlobalBug(t *testing.T) {
 
 	t.Parallel()
 
-	sdb, err := OpenTemp()
+	sdb, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
